@@ -1,7 +1,18 @@
 heykudos
 ========
 
-heytaco clone, allows arbitrary emojis to be used as "kudos".
+HeyKudos is a Slack bot to give other people in your Slack organization "kudos" by sending emojis to each other.
+This is done by pinging a user with `@` and including an emoji (including custom emojis) in the message as well.
+This message needs to be done in an enabled channel, and channels can be enabled with `@heykudos enable`.
+
+The people with the most kudos can be viewed with the leaderboard with `@heykudos leaderboard`. Leaderboards for individual
+sets of emojis can be viewed as well with `@heykudos leaderboard <emoji1> <emoji2>...`.
+
+Requirements
+------------
+
+HeyKudos requires 2 dependencies: [Go](https://golang.org/) and [MySQL](https://www.mysql.com/). The MySQL database can be
+setup following the instructions below.
 
 Configuration
 -------------
