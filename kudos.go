@@ -3,10 +3,11 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/nlopes/slack"
 	"log"
 	"regexp"
 	"strings"
+
+	"github.com/nlopes/slack"
 )
 
 var (
@@ -24,6 +25,7 @@ var (
 	TeamName        string
 	DomainText      string
 	BotUsername     string
+	HelpText        string
 )
 
 func Init(info *slack.Info) {
@@ -51,6 +53,8 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		DisableChannel(ev, rtm, db)
 	case strings.HasPrefix(ev.Text, LeaderboardText):
 		leaderboard(ev, rtm, db)
+	case strings.HasPrefix(ev.Text, HelpText):
+		helpMessage(ev, rtm, db)
 	default:
 		giveKudos(ev, rtm, db)
 	}
@@ -408,4 +412,26 @@ func checkRateLimit(from *User, toSlice []*User, validEmojis []string, db *sql.D
 	CloseRows(rows)
 
 	return BotConfig.AmountPerDay - (count + give)
+}
+
+//helpMessage added 2-21-19
+func helpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
+	//Get user that requested help
+	helpUser, err := GetUser(ev.User, rtm, db)
+	if err != nil {
+		log.Printf("Failed to get info for user %v: %v\n", ev.Username, err)
+		return
+	}
+
+	//TODO replace the help message string with an attachment markup
+	helpString := "You have requested help."
+
+	//Post an ephemeral message to same channel the help request was made from
+	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionPostEphemeral(helpUser.SlackId), slack.MsgOptionText(helpString, false))
+
+	//if an error occurs log it
+	if err != nil {
+		log.Printf("Error while sending message to %v: %v\n", ev.Channel, err)
+	}
+
 }
