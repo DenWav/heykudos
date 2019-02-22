@@ -36,6 +36,7 @@ func Init(info *slack.Info) {
 	TeamName = info.Team.Name
 	DomainText = info.Team.Domain
 	BotUsername = info.User.Name
+	HelpText = fmt.Sprintf("<@%v> help", BotId)
 }
 
 func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
