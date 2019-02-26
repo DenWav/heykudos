@@ -425,31 +425,27 @@ func HelpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	}
 
 	//TODO replace the help message string with an attachment markup
-	helpString := `Heykudos is a bot used to recognize someone for being awesome!
+	helpString := "heykudos is a bot used to recognize someone for being awesome!\n" +
 
-If you want to send someone a kudos simply @ them and send them an emoji. Any emoji will work!
+		"If you want to send someone a kudos simply @ them and send them an emoji. Any emoji will work!\n" +
 
->@heykudos :rainbow:
-		
-You can send a message along too if you like:
-	
->@heykudos :rainbow: for being the best bot on slack!
-		
-You can send kudos in multiple ways:
-	
->Multiple kudos to one person @heykudos :rainbow: :heart:
->One kudos to multiple people @heykudos @Slackbot :rainbow:
->Multiple kudos to multiple people @heykudos @Slackbot :rainbow: :heart:
-		
-You can show the overall leaderboard:
-	
->@heykudos leaderboard
-		
-Or a leaderboard for a particular emoji
-	
->@heykudos leaderboard :rainbow:
-		
-You are limited to 5 kudos per day to send, but can receive an unlimited amount of kudos!`
+		">`@username` :rainbow:\n" +
+
+		"You can send a message along too if you like:\n" +
+		">`@username` :rainbow: for being the best bot on slack!\n" +
+
+		"You can send kudos in multiple ways:\n" +
+		">Multiple kudos to one person `@username` :rainbow: :heart:\n" +
+		">One kudos to multiple people `@username` `@another.username` :rainbow:\n" +
+		">Multiple kudos to multiple people `@username` `@another.username` :rainbow: :heart:\n" +
+
+		"You can show the overall leaderboard:\n" +
+		">`@heykudos` leaderboard\n" +
+
+		"Or a leaderboard for a particular emoji\n" +
+		">`@heykudos` leaderboard :rainbow:\n" +
+
+		"You are limited to 5 kudos per day to send, but can receive an unlimited amount of kudos!"
 	//Post an ephemeral message to same channel the help request was made from
 	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionPostEphemeral(helpUser.SlackId), slack.MsgOptionText(helpString, false))
 
