@@ -26,6 +26,8 @@ var (
 	DomainText      string
 	BotUsername     string
 	HelpText        string
+	SenderboardText string
+	ReceivboardText string
 )
 
 func Init(info *slack.Info) {
@@ -33,6 +35,9 @@ func Init(info *slack.Info) {
 	EnableText = fmt.Sprintf("<@%v> enable", BotId)
 	DisableText = fmt.Sprintf("<@%v> disable", BotId)
 	LeaderboardText = fmt.Sprintf("<@%v> leaderboard", BotId)
+	SenderboardText = fmt.Sprintf("<@%v> leaderboard_send", BotId)
+	ReceivboardText = fmt.Sprintf("<@%v> leaderboard_receive", BotId)
+
 	TeamName = info.Team.Name
 	DomainText = info.Team.Domain
 	BotUsername = info.User.Name
@@ -52,10 +57,15 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	switch {
 	case ev.Text == DisableText:
 		DisableChannel(ev, rtm, db)
-	case strings.HasPrefix(ev.Text, LeaderboardText):
-		leaderboard(ev, rtm, db)
+
 	case strings.HasPrefix(ev.Text, HelpText):
 		HelpMessage(ev, rtm, db)
+	case strings.HasPrefix(ev.Text, SenderboardText):
+		leaderboard(ev, rtm, db, true)
+	case strings.HasPrefix(ev.Text, ReceivboardText):
+		leaderboard(ev, rtm, db, false)
+	case strings.HasPrefix(ev.Text, LeaderboardText):
+		leaderboard(ev, rtm, db, false)
 	default:
 		giveKudos(ev, rtm, db)
 	}
@@ -137,7 +147,7 @@ type UserCount struct {
 	Count    int
 }
 
-func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
+func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB, IS_SEND bool) {
 	// Find emojis to specify for leaderboard
 	emojis := emojiPattern.FindAllStringSubmatch(ev.Text, -1)
 	emojiTexts := make([]string, 0, len(emojis))
@@ -145,18 +155,27 @@ func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		emojiTexts = append(emojiTexts, emoji[1])
 	}
 
+	var queryTerm string
+
+	if IS_SEND {
+		queryTerm = "t.sender"
+	} else {
+		queryTerm = "t.recipient"
+	}
+
+	fmt.Printf("%v", IS_SEND)
 	var rows *sql.Rows
 	var err error
 
 	if len(emojis) == 0 {
 		// sum all emojis when not specified
-		rows, err = db.Query(`
+		rows, err = db.Query(fmt.Sprintf(`
 			SELECT u.username, SUM(t.count)
 			FROM kudos t
-				INNER JOIN users u ON t.recipient = u.id
+				INNER JOIN users u ON %s = u.id
 			GROUP BY u.username
 			ORDER BY SUM(t.count) DESC
-			LIMIT 10`)
+			LIMIT 10`, queryTerm))
 	} else {
 		rows, err = db.Query(fmt.Sprintf(`
 			SELECT u.username, SUM(t.count)
@@ -200,14 +219,22 @@ func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		}
 	}
 
-	attachments := []slack.Attachment{
+	attachments := []slack.Attachment{}
+	var title string
+	if !IS_SEND {
+		title = "Awesomeness"
+	} else {
+		title = "Grateful"
+	}
+	attachments = []slack.Attachment{
 		{
 			Color:      "0C9FE8",
 			MarkdownIn: []string{"text", "pretext"},
-			Pretext:    fmt.Sprintf("%v Leaderboard (%v)", TeamName, sb.String()),
+			Pretext:    fmt.Sprintf("%v %s Leaderboard (%v)", TeamName, title, sb.String()),
 			Text:       formatLeaderboardCounts(userCounts),
 		},
 	}
+
 	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionAttachments(attachments...))
 
 	if err != nil {
