@@ -55,7 +55,7 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	case strings.HasPrefix(ev.Text, LeaderboardText):
 		leaderboard(ev, rtm, db)
 	case strings.HasPrefix(ev.Text, HelpText):
-		helpMessage(ev, rtm, db)
+		HelpMessage(ev, rtm, db)
 	default:
 		giveKudos(ev, rtm, db)
 	}
@@ -416,7 +416,7 @@ func checkRateLimit(from *User, toSlice []*User, validEmojis []string, db *sql.D
 }
 
 //helpMessage added 2-21-19
-func helpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
+func HelpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	//Get user that requested help
 	helpUser, err := GetUser(ev.User, rtm, db)
 	if err != nil {
@@ -425,8 +425,31 @@ func helpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	}
 
 	//TODO replace the help message string with an attachment markup
-	helpString := "You have requested help."
+	helpString := `Heykudos is a bot used to recognize someone for being awesome!
 
+If you want to send someone a kudos simply @ them and send them an emoji. Any emoji will work!
+
+>@heykudos :rainbow:
+		
+You can send a message along too if you like:
+	
+>@heykudos :rainbow: for being the best bot on slack!
+		
+You can send kudos in multiple ways:
+	
+>Multiple kudos to one person @heykudos :rainbow: :heart:
+>One kudos to multiple people @heykudos @Slackbot :rainbow:
+>Multiple kudos to multiple people @heykudos @Slackbot :rainbow: :heart:
+		
+You can show the overall leaderboard:
+	
+>@heykudos leaderboard
+		
+Or a leaderboard for a particular emoji
+	
+>@heykudos leaderboard :rainbow:
+		
+You are limited to 5 kudos per day to send, but can receive an unlimited amount of kudos!`
 	//Post an ephemeral message to same channel the help request was made from
 	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionPostEphemeral(helpUser.SlackId), slack.MsgOptionText(helpString, false))
 
