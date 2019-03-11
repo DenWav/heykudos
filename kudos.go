@@ -28,6 +28,7 @@ var (
 	HelpText        string
 	SenderboardText string
 	ReceivboardText string
+	PersonalText    string
 )
 
 func Init(info *slack.Info) {
@@ -37,7 +38,7 @@ func Init(info *slack.Info) {
 	LeaderboardText = fmt.Sprintf("<@%v> leaderboard", BotId)
 	SenderboardText = fmt.Sprintf("<@%v> leaderboard_send", BotId)
 	ReceivboardText = fmt.Sprintf("<@%v> leaderboard_receive", BotId)
-
+	PersonalText = fmt.Sprintf("<@%v> personal", BotId)
 	TeamName = info.Team.Name
 	DomainText = info.Team.Domain
 	BotUsername = info.User.Name
@@ -66,6 +67,8 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		leaderboard(ev, rtm, db, false)
 	case strings.HasPrefix(ev.Text, LeaderboardText):
 		leaderboard(ev, rtm, db, false)
+	case strings.HasPrefix(ev.Text, PersonalText):
+		Personal(ev, rtm, db)
 	default:
 		giveKudos(ev, rtm, db)
 	}
@@ -149,11 +152,8 @@ type UserCount struct {
 
 func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB, IS_SEND bool) {
 	// Find emojis to specify for leaderboard
-	emojis := emojiPattern.FindAllStringSubmatch(ev.Text, -1)
-	emojiTexts := make([]string, 0, len(emojis))
-	for _, emoji := range emojis {
-		emojiTexts = append(emojiTexts, emoji[1])
-	}
+
+	emojiTexts, emojis := EmojiMatch(ev)
 
 	var queryTerm string
 
