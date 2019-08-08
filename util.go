@@ -41,10 +41,13 @@ func createParams(slice []string) string {
 
 // generify transforms a []string slice into a []interface{}. []string and []interface{} aren't represented the same
 // in memory, so it's not valid to simply cast from one to the other
-func generify(slice []string) []interface{} {
-	result := make([]interface{}, len(slice))
+func generify(slice []string, prepend ...interface{}) []interface{} {
+	result := make([]interface{}, len(slice)+len(prepend))
+	for i, p := range prepend {
+		result[i] = p
+	}
 	for i, e := range slice {
-		result[i] = e
+		result[i+len(prepend)] = e
 	}
 	return result
 }
