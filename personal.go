@@ -3,113 +3,156 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
-	"strings"
-
 	"github.com/nlopes/slack"
+	"log"
+	"sort"
+	"strconv"
+	"strings"
 )
 
-func Personal(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
+func PersonalStats(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
+	emojis := EmojiMatch(ev)
 
-	fmt.Println("You have called the personal leaderboard.")
-
-	var rows *sql.Rows
-	var err error
-
-	emojiTexts, emojis := EmojiMatch(ev)
-
-	helpUser, err := GetUser(ev.User, rtm, db)
+	user, err := GetUser(ev.User, rtm, db)
 
 	if err != nil {
-		log.Printf("Error while querying for Help User: %v\n", err)
+		log.Printf("Error while querying for user: %v\n", err)
 		return
 	}
 
-	var requestId int
+	rcvStats := calcStats(emojis, user, db, true)
+	if rcvStats == nil {
+		return
+	}
+	gvnStats := calcStats(emojis, user, db, false)
+	if gvnStats == nil {
+		return
+	}
 
-	err = db.QueryRow(fmt.Sprintf(`
-			SELECT id
-			FROM users
-			WHERE username = "%v";`, helpUser.Username)).Scan(&requestId)
-
-	fmt.Println(requestId)
+	_, _, err = rtm.PostMessage(
+		ev.Channel,
+		slack.MsgOptionUsername(BotUsername),
+		slack.MsgOptionPostEphemeral(user.SlackId),
+		slack.MsgOptionAttachments(*rcvStats, *gvnStats),
+	)
 
 	if err != nil {
-		log.Printf("Error while querying for userId: %v\n", err)
-		return
+		log.Printf("Error while sending message to %v: %v\n", ev.Channel, err)
+	}
+}
+
+func calcStats(emojis []string, user *User, db *sql.DB, received bool) *slack.Attachment {
+	var rows *sql.Rows
+	var err error
+
+	var target string
+	var join string
+	if received {
+		join = "k.sender"
+		target = "k.recipient"
+	} else {
+		join = "k.recipient"
+		target = "k.sender"
 	}
 
 	if len(emojis) == 0 {
 		rows, err = db.Query(fmt.Sprintf(`
-			SELECT t.sender, t.emoji, t.count, u.username
-			FROM kudos t
-				INNER JOIN users u ON t.sender = u.id
-			WHERE recipient = %d
-			
-			GROUP BY emoji;`, requestId))
+			SELECT %s, k.emoji, k.count, u.username
+			FROM kudos k
+				INNER JOIN users u ON %s = u.id
+			WHERE %s = ?
+			ORDER BY k.count DESC, u.username DESC
+			`, join, join, target), user.Id)
 	} else {
 		rows, err = db.Query(fmt.Sprintf(`
-		SELECT t.sender, t.count, u.username
-		FROM kudos t
-			INNER JOIN users u ON t.sender = u.id
-		WHERE recipient = %d AND t.emoji IN (%v)
-		GROUP BY u.username
-		ORDER BY t.count DESC
-		LIMIT 10;`, requestId, createParams(emojiTexts)), generify(emojiTexts)...)
+			SELECT %s, k.emoji, k.count, u.username
+			FROM kudos k
+				INNER JOIN users u ON %s = u.id
+			WHERE %s = ?
+				AND k.emoji IN (%s)
+			ORDER BY k.count DESC, u.username DESC
+		`, join, join, target, createParams(emojis)), generify(emojis, user.Id)...)
 
 	}
 
 	if err != nil {
 		log.Printf("Error while querying for My Kudos Board: %v\n", err)
-		return
+		return nil
 	}
 
-	userKudos := make([]*UserKudos, 0, 10)
+	userKudos := make(map[int]*UserKudos)
 	for rows.Next() {
-		userKudo := UserKudos{}
-		if len(emojis) == 0 {
-			err = rows.Scan(&userKudo.SenderId, &userKudo.Emoji, &userKudo.Count, &userKudo.SenderName)
-		} else {
-			err = rows.Scan(&userKudo.SenderId, &userKudo.Count, &userKudo.SenderName)
-		}
+		kudosRow := KudosRow{}
+		err = rows.Scan(&kudosRow.SenderId, &kudosRow.Emoji, &kudosRow.Count, &kudosRow.SenderName)
 
 		if err != nil {
 			log.Printf("Failed to get user count data: %v\n", err)
-			return
+			return nil
 		}
 
-		userKudos = append(userKudos, &userKudo)
-		fmt.Println(userKudo)
+		kudo, ok := userKudos[kudosRow.SenderId]
+		if !ok {
+			userKudo := UserKudos{
+				SenderId:   kudosRow.SenderId,
+				Kudos:      make([]*GivenKudos, 0),
+				SenderName: kudosRow.SenderName,
+			}
+			userKudo.Kudos = append(userKudo.Kudos, &GivenKudos{
+				Emoji: kudosRow.Emoji,
+				Count: kudosRow.Count,
+			})
+			userKudo.TotalCount = kudosRow.Count
+			userKudos[kudosRow.SenderId] = &userKudo
+		} else {
+			kudo.Kudos = append(kudo.Kudos, &GivenKudos{
+				Emoji: kudosRow.Emoji,
+				Count: kudosRow.Count,
+			})
+			kudo.TotalCount = kudo.TotalCount + kudosRow.Count
+		}
 	}
 	defer CloseRows(rows)
 
-	attachments := MyBoard(emojiTexts, userKudos)
-	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionPostEphemeral(helpUser.SlackId), slack.MsgOptionAttachments(attachments...))
-
-	if err != nil {
-		log.Printf("Error while sending message to %v: %v\n", ev.Channel, err)
+	kudosList := make([]*UserKudos, 0, len(userKudos))
+	for _, v := range userKudos {
+		kudosList = append(kudosList, v)
 	}
+	sort.Slice(kudosList, func(i, j int) bool {
+		if kudosList[i].TotalCount != kudosList[j].TotalCount {
+			return kudosList[i].TotalCount > kudosList[j].TotalCount
+		}
+		return kudosList[i].SenderName < kudosList[j].SenderName
+	})
 
+	return MyBoard(emojis, kudosList, received)
+}
+
+type GivenKudos struct {
+	Emoji string
+	Count int
 }
 
 type UserKudos struct {
+	SenderId   int
+	Kudos      []*GivenKudos
+	SenderName string
+	TotalCount int
+}
+
+type KudosRow struct {
 	SenderId   int
 	Emoji      string
 	Count      int
 	SenderName string
 }
 
-func EmojiMatch(ev *slack.MessageEvent) ([]string, [][]string) {
+func EmojiMatch(ev *slack.MessageEvent) []string {
 	// Find emojis to specify for leaderboard
 	emojis := emojiPattern.FindAllStringSubmatch(ev.Text, -1)
-	emojiTexts := make([]string, 0, len(emojis))
-	for _, emoji := range emojis {
-		emojiTexts = append(emojiTexts, emoji[1])
-	}
-	return emojiTexts, emojis
+	return unique(flatten(emojis, 1))
 }
 
-func MyBoard(emojiTexts []string, userKudo []*UserKudos) []slack.Attachment {
+func MyBoard(emojiTexts []string, userKudos []*UserKudos, received bool) *slack.Attachment {
 	sb := strings.Builder{}
 	if len(emojiTexts) == 0 {
 		sb.WriteString("all")
@@ -122,26 +165,35 @@ func MyBoard(emojiTexts []string, userKudo []*UserKudos) []slack.Attachment {
 		}
 	}
 
-	attachments := []slack.Attachment{
-		{
-			Color:      "0C9FE8",
-			MarkdownIn: []string{"text", "pretext"},
-			Pretext:    fmt.Sprintf("%v %s (%v)", TeamName, "My Kudos", sb.String()),
-			Text:       formatMyBoardCounts(userKudo),
-		},
+	var title string
+	if received {
+		title = "Received"
+	} else {
+		title = "Given"
 	}
-	return attachments
+	return &slack.Attachment{
+		Color:      "0C9FE8",
+		MarkdownIn: []string{"text", "pretext"},
+		Pretext:    fmt.Sprintf("%v My %s Kudos (%v)", TeamName, title, sb.String()),
+		Text:       formatMyBoardCounts(userKudos),
+	}
 }
 
-func formatMyBoardCounts(userKudo []*UserKudos) string {
+func formatMyBoardCounts(userKudos []*UserKudos) string {
 	builder := strings.Builder{}
 
-	for i, userCount := range userKudo {
+	total := 0
+	for i, kudos := range userKudos {
+		total += kudos.TotalCount
 		if i != 0 {
 			builder.WriteString("\n")
 		}
-		builder.WriteString(fmt.Sprintf("%v. `%v` :%v: `%v`", i+1, userCount.SenderName, userCount.Emoji, userCount.Count))
+		lineBuilder := strings.Builder{}
+		for _, gifts := range kudos.Kudos {
+			lineBuilder.WriteString(fmt.Sprintf("\n\t:%v:: `%v`", gifts.Emoji, gifts.Count))
+		}
+		builder.WriteString(fmt.Sprintf("%v. `%v`: `%v`%v", i+1, kudos.SenderName, kudos.TotalCount, lineBuilder.String()))
 	}
 
-	return builder.String()
+	return "Total Count: `" + strconv.Itoa(total) + "`\n" + builder.String()
 }

@@ -3,11 +3,10 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"github.com/nlopes/slack"
 	"log"
 	"regexp"
 	"strings"
-
-	"github.com/nlopes/slack"
 )
 
 var (
@@ -18,31 +17,29 @@ var (
 var enabledChannels = make(map[string]bool)
 
 var (
-	BotId           string
-	EnableText      string
-	DisableText     string
-	LeaderboardText string
-	TeamName        string
-	DomainText      string
-	BotUsername     string
-	HelpText        string
-	SenderboardText string
-	ReceivboardText string
-	PersonalText    string
+	BotId             string
+	EnableText        string
+	DisableText       string
+	LeaderboardText   string
+	TeamName          string
+	DomainText        string
+	BotUsername       string
+	HelpText          string
+	BlankText         string
+	PersonalStatsText string
 )
 
 func Init(info *slack.Info) {
 	BotId = info.User.ID
-	EnableText = fmt.Sprintf("<@%v> enable", BotId)
-	DisableText = fmt.Sprintf("<@%v> disable", BotId)
-	LeaderboardText = fmt.Sprintf("<@%v> leaderboard", BotId)
-	SenderboardText = fmt.Sprintf("<@%v> leaderboard_send", BotId)
-	ReceivboardText = fmt.Sprintf("<@%v> leaderboard_receive", BotId)
-	PersonalText = fmt.Sprintf("<@%v> personal", BotId)
+	EnableText = strings.ToLower(fmt.Sprintf("<@%v> enable", BotId))
+	DisableText = strings.ToLower(fmt.Sprintf("<@%v> disable", BotId))
+	LeaderboardText = strings.ToLower(fmt.Sprintf("<@%v> leaderboard", BotId))
+	PersonalStatsText = strings.ToLower(fmt.Sprintf("<@%v> stats", BotId))
 	TeamName = info.Team.Name
 	DomainText = info.Team.Domain
 	BotUsername = info.User.Name
-	HelpText = fmt.Sprintf("<@%v> help", BotId)
+	HelpText = strings.ToLower(fmt.Sprintf("<@%v> help", BotId))
+	BlankText = strings.ToLower(fmt.Sprintf("<@%v>", BotId))
 }
 
 func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
@@ -58,17 +55,14 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	switch {
 	case ev.Text == DisableText:
 		DisableChannel(ev, rtm, db)
-
-	case strings.HasPrefix(ev.Text, HelpText):
+	case strings.HasPrefix(strings.ToLower(ev.Text), HelpText):
+		fallthrough
+	case strings.Trim(strings.ToLower(ev.Text), " \t") == BlankText:
 		HelpMessage(ev, rtm, db)
-	case strings.HasPrefix(ev.Text, SenderboardText):
-		leaderboard(ev, rtm, db, true)
-	case strings.HasPrefix(ev.Text, ReceivboardText):
-		leaderboard(ev, rtm, db, false)
-	case strings.HasPrefix(ev.Text, LeaderboardText):
-		leaderboard(ev, rtm, db, false)
-	case strings.HasPrefix(ev.Text, PersonalText):
-		Personal(ev, rtm, db)
+	case strings.HasPrefix(strings.ToLower(ev.Text), LeaderboardText):
+		leaderboard(ev, rtm, db)
+	case strings.HasPrefix(strings.ToLower(ev.Text), PersonalStatsText):
+		PersonalStats(ev, rtm, db)
 	default:
 		giveKudos(ev, rtm, db)
 	}
@@ -150,47 +144,66 @@ type UserCount struct {
 	Count    int
 }
 
-func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB, IS_SEND bool) {
+func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 	// Find emojis to specify for leaderboard
+	emojis := EmojiMatch(ev)
 
-	emojiTexts, emojis := EmojiMatch(ev)
-
-	var queryTerm string
-
-	if IS_SEND {
-		queryTerm = "t.sender"
-	} else {
-		queryTerm = "t.recipient"
+	rcvBoard := genLeaderboard(db, emojis, true)
+	if rcvBoard == nil {
+		return
+	}
+	gvnBoard := genLeaderboard(db, emojis, false)
+	if gvnBoard == nil {
+		return
+	}
+	attachments := []slack.Attachment{
+		*rcvBoard,
+		*gvnBoard,
 	}
 
-	fmt.Printf("%v", IS_SEND)
+	_, _, err := rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionAttachments(attachments...))
+
+	if err != nil {
+		log.Printf("Error while sending message to %v: %v\n", ev.Channel, err)
+	}
+}
+
+func genLeaderboard(db *sql.DB, emojis []string, receiveBoard bool) *slack.Attachment {
 	var rows *sql.Rows
 	var err error
+
+	var target string
+	if receiveBoard {
+		target = "k.recipient"
+	} else {
+		target = "k.sender"
+	}
 
 	if len(emojis) == 0 {
 		// sum all emojis when not specified
 		rows, err = db.Query(fmt.Sprintf(`
-			SELECT u.username, SUM(t.count)
-			FROM kudos t
-				INNER JOIN users u ON %s = u.id
+			SELECT u.username, SUM(k.count)
+			FROM kudos k
+				INNER JOIN users u ON %v = u.id
 			GROUP BY u.username
-			ORDER BY SUM(t.count) DESC
-			LIMIT 10`, queryTerm))
+			ORDER BY SUM(k.count) DESC, u.username DESC
+			LIMIT 10
+		`, target))
 	} else {
 		rows, err = db.Query(fmt.Sprintf(`
-			SELECT u.username, SUM(t.count)
-			FROM kudos t
-				INNER JOIN users u ON t.recipient = u.id
-			WHERE t.emoji IN (%v)
+			SELECT u.username, SUM(k.count)
+			FROM kudos k
+				INNER JOIN users u ON %v = u.id
+			WHERE k.emoji IN (%v)
 			GROUP BY u.username
-			ORDER BY SUM(t.count) DESC
+			ORDER BY SUM(k.count) DESC, u.username DESC
 			LIMIT 10
-		`, createParams(emojiTexts)), generify(emojiTexts)...)
+		`, target, createParams(emojis)), generify(emojis)...)
 	}
 
 	if err != nil {
 		log.Printf("Error while querying for leaderboard: %v\n", err)
-		return
+		return nil
 	}
 
 	defer CloseRows(rows)
@@ -201,17 +214,17 @@ func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB, IS_SEND boo
 		err = rows.Scan(&userCount.Username, &userCount.Count)
 		if err != nil {
 			log.Printf("Failed to get user count data: %v\n", err)
-			return
+			return nil
 		}
 
 		userCounts = append(userCounts, &userCount)
 	}
 
 	sb := strings.Builder{}
-	if len(emojiTexts) == 0 {
+	if len(emojis) == 0 {
 		sb.WriteString("all")
 	} else {
-		for i, text := range emojiTexts {
+		for i, text := range emojis {
 			if i != 0 {
 				sb.WriteString(", ")
 			}
@@ -219,26 +232,18 @@ func leaderboard(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB, IS_SEND boo
 		}
 	}
 
-	attachments := []slack.Attachment{}
 	var title string
-	if !IS_SEND {
-		title = "Awesomeness"
+	if receiveBoard {
+		title = "Received"
 	} else {
-		title = "Grateful"
-	}
-	attachments = []slack.Attachment{
-		{
-			Color:      "0C9FE8",
-			MarkdownIn: []string{"text", "pretext"},
-			Pretext:    fmt.Sprintf("%v %s Leaderboard (%v)", TeamName, title, sb.String()),
-			Text:       formatLeaderboardCounts(userCounts),
-		},
+		title = "Given"
 	}
 
-	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionAttachments(attachments...))
-
-	if err != nil {
-		log.Printf("Error while sending message to %v: %v\n", ev.Channel, err)
+	return &slack.Attachment{
+		Color:      "0C9FE8",
+		MarkdownIn: []string{"text", "pretext"},
+		Pretext:    fmt.Sprintf("%v %s Leaderboard (%v)", TeamName, title, sb.String()),
+		Text:       formatLeaderboardCounts(userCounts),
 	}
 }
 
@@ -451,7 +456,6 @@ func HelpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		return
 	}
 
-	//TODO replace the help message string with an attachment markup
 	helpString := "heykudos is a bot used to recognize someone for being awesome!\n" +
 
 		"If you want to send someone a kudos simply @ them and send them an emoji. Any emoji will work!\n" +
@@ -465,16 +469,29 @@ func HelpMessage(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 		">Multiple kudos to one person `@username` :rainbow: :heart:\n" +
 		">One kudos to multiple people `@username` `@another.username` :rainbow:\n" +
 		">Multiple kudos to multiple people `@username` `@another.username` :rainbow: :heart:\n" +
+		">When sending multiple kudos to multiple people, they need to match up 1:1. That is, if you have 3 people listed, you need to also list 3 emojis.\n" +
 
 		"You can show the overall leaderboard:\n" +
 		">`@heykudos` leaderboard\n" +
 
-		"Or a leaderboard for a particular emoji\n" +
-		">`@heykudos` leaderboard :rainbow:\n" +
+		"Or a leaderboard for particular emojis:\n" +
+		">`@heykudos` leaderboard :rainbow: :taco:\n" +
 
-		"You are limited to 5 kudos per day to send, but can receive an unlimited amount of kudos!"
+		"You can see a breakdown of all the kudos you've given and received:\n" +
+		"> `@heykudos` stats\n" +
+
+		"Or a breakdown for specific emojis you've given and received:\n" +
+		"> `@heykudos` stats :rainbow: :taco:\n" +
+
+		"You are limited to 5 kudos per day to send, but you can receive an unlimited amount of kudos!"
+
 	//Post an ephemeral message to same channel the help request was made from
-	_, _, err = rtm.PostMessage(ev.Channel, slack.MsgOptionUsername(BotUsername), slack.MsgOptionPostEphemeral(helpUser.SlackId), slack.MsgOptionText(helpString, false))
+	_, _, err = rtm.PostMessage(
+		ev.Channel,
+		slack.MsgOptionUsername(BotUsername),
+		slack.MsgOptionPostEphemeral(helpUser.SlackId),
+		slack.MsgOptionText(helpString, false),
+	)
 
 	//if an error occurs log it
 	if err != nil {
