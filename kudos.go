@@ -25,45 +25,68 @@ var (
 	DomainText        string
 	BotUsername       string
 	HelpText          string
-	BlankText         string
+	CommandText       string
 	PersonalStatsText string
 )
 
 func Init(info *slack.Info) {
 	BotId = info.User.ID
-	EnableText = strings.ToLower(fmt.Sprintf("<@%v> enable", BotId))
-	DisableText = strings.ToLower(fmt.Sprintf("<@%v> disable", BotId))
-	LeaderboardText = strings.ToLower(fmt.Sprintf("<@%v> leaderboard", BotId))
-	PersonalStatsText = strings.ToLower(fmt.Sprintf("<@%v> stats", BotId))
+	EnableText = "enable"
+	DisableText = "disable"
+	LeaderboardText = "leaderboard"
+	PersonalStatsText = "stats"
 	TeamName = info.Team.Name
 	DomainText = info.Team.Domain
 	BotUsername = info.User.Name
-	HelpText = strings.ToLower(fmt.Sprintf("<@%v> help", BotId))
-	BlankText = strings.ToLower(fmt.Sprintf("<@%v>", BotId))
+	HelpText = "help"
+	CommandText = fmt.Sprintf("<@%v>", BotId)
 }
 
 func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
-	if ev.Text == EnableText {
-		EnableChannel(ev, rtm, db)
-		return
-	}
+	if strings.HasPrefix(ev.Text, CommandText) {
+		// is a command
+		fullCommand := strings.TrimLeft(strings.TrimPrefix(ev.Text, CommandText), " \t")
+		index := strings.IndexAny(fullCommand, " \t")
+		var cmd string
+		if index == -1 {
+			cmd = fullCommand
+		} else {
+			cmd = fullCommand[:index]
+		}
 
-	if !checkChannelEnabled(ev.Channel, db) {
-		return
-	}
+		trimmedCmd := strings.ToLower(strings.Trim(cmd, " \t"))
 
-	switch {
-	case ev.Text == DisableText:
-		DisableChannel(ev, rtm, db)
-	case strings.HasPrefix(strings.ToLower(ev.Text), HelpText):
-		fallthrough
-	case strings.Trim(strings.ToLower(ev.Text), " \t") == BlankText:
-		HelpMessage(ev, rtm, db)
-	case strings.HasPrefix(strings.ToLower(ev.Text), LeaderboardText):
-		leaderboard(ev, rtm, db)
-	case strings.HasPrefix(strings.ToLower(ev.Text), PersonalStatsText):
-		PersonalStats(ev, rtm, db)
-	default:
+		if len(trimmedCmd) == 0 {
+			HelpMessage(ev, rtm, db)
+			return
+		}
+
+		switch trimmedCmd {
+		case EnableText:
+			EnableChannel(ev, rtm, db)
+			return
+		case DisableText:
+			DisableChannel(ev, rtm, db)
+			return
+		case HelpText:
+			HelpMessage(ev, rtm, db)
+			return
+		}
+
+		if !checkChannelEnabled(ev.Channel, db) {
+			return
+		}
+
+		switch trimmedCmd {
+		case LeaderboardText:
+			leaderboard(ev, rtm, db)
+		case PersonalStatsText:
+			PersonalStats(ev, rtm, db)
+		default:
+			HelpMessage(ev, rtm, db)
+			return
+		}
+	} else {
 		giveKudos(ev, rtm, db)
 	}
 }
