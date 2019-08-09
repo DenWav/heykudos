@@ -87,6 +87,10 @@ func MessageHandler(ev *slack.MessageEvent, rtm *slack.RTM, db *sql.DB) {
 			return
 		}
 	} else {
+		if !checkChannelEnabled(ev.Channel, db) {
+			return
+		}
+
 		giveKudos(ev, rtm, db)
 	}
 }
